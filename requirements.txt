@@ -1,5 +1,9 @@
-numpy
-scipy
-torch
-pandas
-matplotlib
+# Versions used to produce the results in final_results/ (Python 3.12, CPU-only torch).
+numpy==2.4.3
+scipy==1.17.1
+torch==2.10.0
+pandas==3.0.1
+matplotlib==3.10.8
+
+# Optional: live training dashboard (streamlit run dashboard.py)
+# streamlit

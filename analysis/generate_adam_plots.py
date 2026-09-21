@@ -5,6 +5,7 @@ import os
 
 # Paths are relative to the uqc_repro root, whatever the working directory.
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+OUT_DIR = os.path.join("final_results", "adam_results")
 
 # Set aesthetic parameters
 plt.rcParams.update({
@@ -37,8 +38,9 @@ def generate_figure_1():
     csv_path = "final_results/adam_noise/horizon_search.csv"
     df = pd.read_csv(csv_path)
     
-    # Export data to figures_data
-    df.to_csv("final_results/figures_data/adam_horizon_sweep.csv", index=False)
+    # Export the plotted data next to the figure
+    os.makedirs(OUT_DIR, exist_ok=True)
+    df.to_csv(os.path.join(OUT_DIR, "adam_horizon_sweep.csv"), index=False)
     
     fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
     
@@ -94,7 +96,7 @@ def generate_figure_1():
     ax2.grid(True)
     
     plt.tight_layout()
-    plt.savefig("fig_adam_single_target_horizon_sweep.png", dpi=300)
+    plt.savefig(os.path.join(OUT_DIR, "fig_adam_single_target_horizon_sweep.png"), dpi=300)
     plt.close()
 
 def generate_figure_2():
@@ -102,8 +104,9 @@ def generate_figure_2():
     csv_path = "final_results/adam_runtime_sweep/runtime_summary.csv"
     df = pd.read_csv(csv_path)
     
-    # Export data to figures_data
-    df.to_csv("final_results/figures_data/adam_family_sweep.csv", index=False)
+    # Export the plotted data next to the figure
+    os.makedirs(OUT_DIR, exist_ok=True)
+    df.to_csv(os.path.join(OUT_DIR, "adam_family_sweep.csv"), index=False)
     
     fig, axes = plt.subplots(3, 1, figsize=(10, 15), sharex=True)
     
@@ -144,7 +147,7 @@ def generate_figure_2():
     ax2.grid(True)
     
     plt.tight_layout()
-    plt.savefig("fig_adam_family_sweep_gamma_pi_over_2.png", dpi=300)
+    plt.savefig(os.path.join(OUT_DIR, "fig_adam_family_sweep_gamma_pi_over_2.png"), dpi=300)
     plt.close()
 
 if __name__ == "__main__":

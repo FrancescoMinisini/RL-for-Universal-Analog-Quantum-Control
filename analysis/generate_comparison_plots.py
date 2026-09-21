@@ -6,6 +6,7 @@ import numpy as np
 
 # Paths are relative to the uqc_repro root, whatever the working directory.
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+OUT_DIR = os.path.join("final_results", "adam_vs_nominal_results")
 
 # Set aesthetic parameters
 plt.rcParams.update({
@@ -54,8 +55,8 @@ def generate_comparison_plots():
     df = pd.DataFrame(metrics)
     
     # Ensure export directory exists
-    os.makedirs("final_results/figures_data", exist_ok=True)
-    out_csv = "final_results/figures_data/adam_vs_nominal_comparison.csv"
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out_csv = os.path.join(OUT_DIR, "adam_vs_nominal_comparison.csv")
     df.to_csv(out_csv, index=False)
     print(f"Exported data to {out_csv}")
     
@@ -107,7 +108,7 @@ def generate_comparison_plots():
     
     # The user asked to generate the figures inside nominal_results folder.
     # We create it if it doesn't exist to be safe.
-    target_dir = "final_results"
+    target_dir = OUT_DIR
     os.makedirs(target_dir, exist_ok=True)
     out_img = os.path.join(target_dir, "fig_single_target_adam_vs_nominal_trpo.png")
     

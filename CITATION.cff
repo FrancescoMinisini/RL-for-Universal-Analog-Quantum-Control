@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this code or data, please cite it as below."
+title: "RL for Universal Analog Quantum Control: an independent reproduction"
+type: software
+authors:
+  - family-names: Minisini
+    given-names: Francesco Giuseppe
+repository-code: "https://github.com/FrancescoMinisini/RL-for-Universal-Analog-Quantum-Control"
+license: MIT
+date-released: "2026-09-21"
+keywords:
+  - quantum control
+  - reinforcement learning
+  - TRPO
+  - superconducting qubits
+  - leakage
+references:
+  - type: thesis
+    title: "Reinforcement-Learning Framework for Robust and Universal Analog Quantum Control on Superconducting Qubits"
+    authors:
+      - family-names: Minisini
+        given-names: Francesco Giuseppe
+    institution:
+      name: "University of Milan"
+    year: 2026
+    thesis-type: "Bachelor's thesis"
+    url: "https://github.com/FrancescoMinisini/Document"

@@ -38,14 +38,14 @@ These turn the runs stored in `final_results/<exp>/` into the CSVs and figures i
 | `analysis/analyze_nn_size_sweep.py` | Architecture sweep (`final_results/nn_size_sweep`) -> `final_results/nn_size_sweep_results/`. |
 | `analysis/export_ewma_data.py` | Merges the per-method robustness curves of `final_results/robustness_analysis*/` into `combined_ewma_data.csv` (raw columns plus EWMA smoothing). |
 | `analysis/analyze_crossover.py` | Prints where the robustness curves of `final_results/robustness_analysis/` cross. |
-| `analysis/generate_*_plots.py` | Adam sweeps, Adam vs nominal TRPO, nominal TRPO training curves. |
+| `analysis/generate_*_plots.py` | Adam sweeps, Adam vs nominal TRPO, nominal TRPO training curves -> `final_results/{adam_results,adam_vs_nominal_results,trpo_nominal_results}/`. |
 
 ## Results Directories
 
 | Directory | Content |
 | :--- | :--- |
-| `runs/` | Working output of the training scripts. |
-| `final_results/<exp>/` | Runs retained for the thesis, copied from `runs/`. |
+| `runs/` | Working output of the training scripts (not version-controlled). |
+| `final_results/<exp>/` | Runs retained for the thesis, copied from `runs/`; described in `final_results/README.md`. |
 | `final_results/<exp>_results/` | Analysis outputs, copied to `Document/data/<exp>_results/` in the thesis repository. |
 | `final_results/robustness_analysis/` | Robustness curves used by the thesis (`noise`, `nominal`, `adam_noise`), as written by `benchmark_robustness.py`. |
 | `final_results/robustness_analysis_2/` | Second, coarser robustness sweep using the `adam_test` Adam plan. |

@@ -5,6 +5,7 @@ import numpy as np
 
 # Paths are relative to the uqc_repro root, whatever the working directory.
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+OUT_DIR = os.path.join("final_results", "trpo_nominal_results")
 
 # Set aesthetic parameters
 plt.rcParams.update({
@@ -53,7 +54,8 @@ def generate_nominal_trpo_training_curves():
     df_subset['eval_min_cost_time_ns'] = df_subset['eval_min_cost_time_ns'].fillna(df_subset['eval_time_ns'])
     
     # Export data
-    out_csv = "final_results/figures_data/nominal_trpo_training_curves.csv"
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out_csv = os.path.join(OUT_DIR, "nominal_trpo_training_curves.csv")
     df_subset.to_csv(out_csv, index=False)
     print(f"Exported data to {out_csv}")
     
@@ -109,7 +111,7 @@ def generate_nominal_trpo_training_curves():
     ax2.grid(True)
     
     plt.tight_layout()
-    out_img = "fig_nominal_trpo_training_curves.png"
+    out_img = os.path.join(OUT_DIR, "fig_nominal_trpo_training_curves.png")
     plt.savefig(out_img, dpi=300)
     plt.close()
     print(f"Saved plot to {out_img}")

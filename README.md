@@ -17,6 +17,14 @@ The TRPO scripts now save:
 - `best_agent.pt` and `final_agent.pt`
 - `plans/iter_XXXXXX_control_plan.npz`, `best_control_plan.npz`, and `final_control_plan.npz`
 
+## Layout
+
+- `uqc/` — physics, environment, TRPO agent, Adam baseline and evaluation library.
+- top-level `*.py` — training and evaluation entry points (run from this directory so `uqc` is importable).
+- `analysis/` — post-processing of `final_results/` into the CSVs and figures used by the thesis.
+- `final_results/` — runs retained for the thesis and their analysis outputs; `runs/` — working output.
+- `docs/` — reproduction notes and historical pilot results; `docs/file_overview.md` describes every file.
+
 ## Scripts
 
 Single-target TRPO training:

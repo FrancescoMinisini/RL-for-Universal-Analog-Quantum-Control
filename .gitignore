@@ -228,3 +228,5 @@ runs/
 
 model/
 tmp/
+# Files removed from version control but kept on disk
+archive/

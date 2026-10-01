@@ -1,0 +1,2 @@
+horizon_ns,optimizer_cost,nominal_cost,nominal_fidelity,nominal_leakage,nominal_leakage_boundary,nominal_leakage_integral,nominal_boundary_cost,nominal_time_cost,nominal_time_ns
+70.0,2.203889913927633,0.15757516180135928,0.9966196279490397,0.00028240375695337327,2.0843177999595752e-05,0.00026156057895377753,0.004280737055555739,0.11666666666666668,70.0

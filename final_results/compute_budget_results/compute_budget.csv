@@ -1,0 +1,4 @@
+controller,iterations,reported_iteration,episodes,simulator_steps_total,simulator_steps_to_reported_plan,wall_clock_seconds,total_over_adam,to_reported_plan_over_adam
+trpo_nominal,115,111,1075000,9.59185e+07,9.41215e+07,,290.662,285.217
+trpo_noise,105,11,1050000,9.45e+07,9.9e+06,,286.364,30
+adam_horizon_search,6000,,6000,330000,330000,1919.66,1,1

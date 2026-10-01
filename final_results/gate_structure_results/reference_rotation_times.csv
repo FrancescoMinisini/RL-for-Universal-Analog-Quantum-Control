@@ -1,0 +1,4 @@
+gate,required_area_rad,t_free_end_ns,t_zero_end_ns
+pi rotation by the drive,1.5708,54,72
+pi/2 rotation by the drive,0.785398,40,56
+Z rotation by pi by the detuning,3.14159,74,96

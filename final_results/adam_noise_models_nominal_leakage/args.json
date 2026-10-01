@@ -1,0 +1,19 @@
+{
+  "alpha": "2.2",
+  "gamma": "pi/2",
+  "horizons_ns": "70,100,130",
+  "seeds": "1,2,3,4,5,6,7,8",
+  "white_noise_std": 1.0,
+  "quasi_static_noise_std": 0.3,
+  "leakage_bound": "nominal",
+  "dt_ns": 2.0,
+  "runtime_norm_ns": 60.0,
+  "lr": 0.03,
+  "adam_iters": 400,
+  "cost_chi": 10.0,
+  "cost_beta": 10.0,
+  "cost_mu": 0.2,
+  "cost_kappa": 0.1,
+  "num_workers": 9,
+  "out": "runs/adam_noise_models_nominal_leakage"
+}

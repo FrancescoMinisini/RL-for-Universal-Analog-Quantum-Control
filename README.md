@@ -73,6 +73,11 @@ python train_trpo_runtime.py --gammas pi/2 --out runs/runtime_sweep
 # Adam baseline with a horizon search
 python train_adam_baseline.py --alpha 2.2 --gamma pi/2 --out runs/adam_2p2
 
+# Adam at fixed horizons without noise, under white noise and under quasi-static noise (about 20 minutes)
+python train_adam_noise_models.py --alpha 2.2 --out runs/adam_noise_models
+# the same with the leakage bound of the objective taken from the noise-free controls
+python train_adam_noise_models.py --alpha 2.2 --leakage-bound nominal --out runs/adam_noise_models_nominal_leakage
+
 # transfer from a trained checkpoint to nearby targets, compared with training from scratch
 python train_transition_experiments.py --source-checkpoints runs/trpo_2p2_noise/best_agent.pt \
   --source-labels from_2p2 --targets 2.4:pi/2,2.6:pi/2 --include-scratch --out runs/transitions
@@ -86,7 +91,7 @@ Each training run writes `args.json`, `training_log.jsonl`, `summary.json`, per-
 --resume <run_dir>` continues an interrupted run. `train_trpo_runtime.py` and `train_adam_runtime.py` take
 `--resume` with the same `--out`.
 
-## Reproducing the thesis results
+## Reproducing the thesis and preprint results
 
 1. **Retrain (optional, hours to days on a CPU).** The arguments of every retained run are stored in
    its `final_results/<run>/args.json`. [`final_results/README.md`](final_results/README.md) lists the
@@ -104,16 +109,47 @@ Each training run writes `args.json`, `training_log.jsonl`, `summary.json`, per-
    ```
 
    Each script writes into `final_results/<experiment>_results/`. The CSVs they produce are
-   byte-identical to the ones plotted in the thesis and the preprint.
-3. **Redo the robustness evaluation (hours).** Evaluate the three best control plans with the
-   settings used for the thesis. The evaluation is seeded, so the resulting `robustness_curve.csv`
-   files reproduce those in `final_results/robustness_analysis/` exactly:
+   byte-identical to the ones plotted in the thesis and the preprint. The preprint's additional
+   analyses are recomputed with
 
    ```bash
-   python benchmark_robustness.py --inputs final_results/noise final_results/nominal final_results/adam_noise \
-     --labels noise nominal adam_noise --noise-min 0.1 --noise-max 3.5 --noise-step 0.001 \
-     --samples 60 --seed 1 --out runs/robustness_analysis
+   python analysis/analyze_gate_structure.py      # exchange-angle / Weyl / CNOT structure of N(a, a, pi/2)
+   python analysis/analyze_mirror_symmetry.py     # curriculum pulses mirrored onto pi - alpha
+   python analysis/analyze_noisy_leakage.py       # UFO cost terms under the training noise (about a minute)
+   python analysis/summarize_robustness_3.py      # numbers of the preprint's robustness table
+   python analysis/white_noise_first_order.py     # first-order noise rate versus the measured rates
+   python analysis/white_noise_checks.py          # exact rate per plan, per-channel / interval / pre-filter checks (ten minutes)
+   python analysis/noise_with_memory.py           # quasi-static and correlated noise (a few minutes, --workers)
+   python analysis/exchange_area_bound.py         # bandwidth-limited exchange time across the family
+   python analysis/compute_budget.py              # simulator steps per controller
+   python analysis/conditional_phase.py           # conditional phase of the higher levels versus the nominal infidelity
+   python analysis/noisy_leakage_time_step.py     # noisy leakage bound on finer time grids (about a minute)
    ```
+
+3. **Redo the robustness evaluations (hours).** The evaluations are seeded, so they reproduce the
+   stored CSVs exactly. The preprint uses `final_results/robustness_analysis_3/`, one call per plan:
+
+   ```bash
+   python benchmark_robustness.py --inputs final_results/trpo_noise_alpha_2.2/plans/iter_000011_control_plan.npz \
+     --labels trpo_noise --noise-min 0.1 --noise-max 3.5 --noise-step 0.001 --samples 60 --seed 1 \
+     --out final_results/robustness_analysis_3
+   ```
+
+   and likewise for `final_results/nominal/best_control_plan.npz` (`trpo_nominal`),
+   `final_results/trpo_noise_alpha_2.2/best_control_plan.npz` (`trpo_noise_it091`),
+   `final_results/adam_noise/best_control_plan.npz` (`adam_60ns`) and
+   `final_results/adam_noise_70ns/best_control_plan.npz` (`adam_70ns`), about 20 minutes each on one
+   core. The matched-history and closed-loop evaluations run in parallel:
+
+   ```bash
+   python analysis/robustness_training_trajectories.py --workers 6   # about an hour
+   python analysis/closed_loop_vs_open_loop.py --workers 6           # about ten minutes
+   ```
+
+   The thesis used `final_results/robustness_analysis/` (`--inputs final_results/noise
+   final_results/nominal final_results/adam_noise --labels noise nominal adam_noise`). Its `noise`
+   plan targets `N(0, 0, pi/2)`, not `N(2.2, 2.2, pi/2)`; see
+   [`final_results/README.md`](final_results/README.md).
 
 ## Modeling assumptions
 
@@ -124,7 +160,10 @@ exposed as command-line arguments rather than hard-coded:
 - `runtime_norm_ns`: the time normalization that makes the `κT` term commensurate with the others;
 - `termination_cost` / `advance_cost_threshold`: thresholds for early stopping and curriculum advancement;
 - TRPO settings such as `max_kl`, `lam`, `value_epochs` and the initial exploration scale;
-- the time step `dt_ns` and the runtime budget `max_time_ns`.
+- the time step `dt_ns` and the runtime budget `max_time_ns`. The published paper says only that its pulses
+  have "around one thousand time steps"; the retained runs use 2 ns steps (30 to 90 per pulse). The step does
+  not change the noise-free control problem, but it changes what a given noise strength means; the preprint
+  quantifies this.
 
 [`docs/REPRO_NOTES.md`](docs/REPRO_NOTES.md) lists the implementation choices in detail.
 

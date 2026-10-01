@@ -24,6 +24,11 @@ class AdamBaselineConfig:
     horizons_ns: Tuple[float, ...] = (60.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0)
     train_noise_std_mhz: float = 0.0
     train_noise_samples: int = 1
+    # "white": a new draw at every step (the UFO training noise); "quasi_static": one draw per trajectory
+    train_noise_mode: str = "white"
+    # False: the leakage bound is accumulated from the noisy Hamiltonian, as in the TRPO environment;
+    # True: from the noise-free controls, so that the noise enters the objective through the fidelity only
+    leakage_from_nominal_controls: bool = False
     seed: int = 1
     cost_weights: UFOCostWeights = UFOCostWeights()
 
@@ -161,7 +166,16 @@ class TorchGmonObjective:
     def operator_norm(self, M: torch.Tensor) -> torch.Tensor:
         return torch.linalg.svdvals(M)[0]
 
-    def simulate_cost(self, filtered_controls: torch.Tensor, target_gate: torch.Tensor, sigma_mhz: float = 0.0) -> torch.Tensor:
+    def simulate_cost(
+        self,
+        filtered_controls: torch.Tensor,
+        target_gate: torch.Tensor,
+        sigma_mhz: float = 0.0,
+        noise_mode: str = "white",
+        leakage_from_nominal: bool = False,
+    ) -> torch.Tensor:
+        if noise_mode not in ("white", "quasi_static"):
+            raise ValueError(f"Unknown noise mode: {noise_mode!r}")
         T = filtered_controls.shape[0]
         U = self.eye
         prev_s1 = None
@@ -169,12 +183,21 @@ class TorchGmonObjective:
         hod_hist: List[torch.Tensor] = []
         delta_hist: List[torch.Tensor] = []
 
+        quasi_static = sigma_mhz > 0.0 and noise_mode == "quasi_static"
+        if quasi_static:
+            eta_offset = torch.randn((), dtype=self.rdtype, device=self.device) * sigma_mhz
+            offsets = torch.randn(5, dtype=self.rdtype, device=self.device) * sigma_mhz
+
         for t in range(T):
             controls = filtered_controls[t]
             eta = torch.tensor(self.config.eta_base_mhz, dtype=self.rdtype, device=self.device)
             if sigma_mhz > 0.0:
-                eta = eta + torch.randn((), dtype=self.rdtype, device=self.device) * sigma_mhz
-                noise = torch.randn(5, dtype=self.rdtype, device=self.device) * sigma_mhz
+                if quasi_static:
+                    eta = eta + eta_offset
+                    noise = offsets
+                else:
+                    eta = eta + torch.randn((), dtype=self.rdtype, device=self.device) * sigma_mhz
+                    noise = torch.randn(5, dtype=self.rdtype, device=self.device) * sigma_mhz
                 noisy = controls.clone()
                 noisy[0] = noisy[0] + noise[0]
                 noisy[1] = noisy[1] + noise[1]
@@ -187,6 +210,9 @@ class TorchGmonObjective:
             H = self.hamiltonian(noisy, eta)
             U = torch.matrix_exp(-1j * H * self.config.dt_ns) @ U
 
+            if leakage_from_nominal and sigma_mhz > 0.0:
+                eta = torch.tensor(self.config.eta_base_mhz, dtype=self.rdtype, device=self.device)
+                H = self.hamiltonian(controls, eta)
             _, h1, h2, _ = self.decompose_hamiltonian(H, eta)
             s1 = self.compute_s1(h2, eta)
             ds1_dt = torch.zeros_like(s1) if prev_s1 is None else (s1 - prev_s1) / self.config.dt_ns
@@ -250,14 +276,16 @@ class TorchGmonObjective:
             opt.zero_grad(set_to_none=True)
             controls = self.raw_to_controls(raw)
             filtered = self.apply_filter(controls)
+            noise = dict(
+                sigma_mhz=self.config.train_noise_std_mhz,
+                noise_mode=self.config.train_noise_mode,
+                leakage_from_nominal=self.config.leakage_from_nominal_controls,
+            )
             if self.config.train_noise_samples > 1 and self.config.train_noise_std_mhz > 0.0:
-                losses = [
-                    self.simulate_cost(filtered, target, sigma_mhz=self.config.train_noise_std_mhz)
-                    for _ in range(self.config.train_noise_samples)
-                ]
+                losses = [self.simulate_cost(filtered, target, **noise) for _ in range(self.config.train_noise_samples)]
                 loss = torch.stack(losses).mean()
             else:
-                loss = self.simulate_cost(filtered, target, sigma_mhz=self.config.train_noise_std_mhz)
+                loss = self.simulate_cost(filtered, target, **noise)
             loss.backward()
             torch.nn.utils.clip_grad_norm_([raw], 10.0)
             opt.step()

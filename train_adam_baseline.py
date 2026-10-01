@@ -83,6 +83,12 @@ def main() -> None:
     parser.add_argument("--horizons-ns", type=str, default="60,90,120,150,180,210,240")
     parser.add_argument("--train-noise-std", type=float, default=0.0)
     parser.add_argument("--train-noise-samples", type=int, default=1)
+    parser.add_argument(
+        "--train-noise-mode",
+        choices=["white", "quasi_static"],
+        default="white",
+        help="white: a new noise draw at every step; quasi_static: one draw held for the whole pulse.",
+    )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--cost-chi", type=float, default=10.0, help="Weight for fidelity cost")
     parser.add_argument("--cost-beta", type=float, default=10.0, help="Weight for leakage cost")
@@ -136,6 +142,7 @@ def main() -> None:
         horizons_ns=horizons,
         train_noise_std_mhz=args.train_noise_std,
         train_noise_samples=args.train_noise_samples,
+        train_noise_mode=args.train_noise_mode,
         seed=args.seed,
         cost_weights=weights,
     )
@@ -341,6 +348,7 @@ def main() -> None:
         },
         "train_noise_std_mhz": float(args.train_noise_std),
         "train_noise_samples": int(args.train_noise_samples),
+        "train_noise_mode": args.train_noise_mode,
         # Best result
         "best_horizon_ns": float(best["horizon_ns"]),
         "objective_cost": float(best["best_cost"]),

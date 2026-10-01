@@ -1,0 +1,66 @@
+{
+  "adam_iters": 400,
+  "alpha": 2.2,
+  "best_horizon_ns": 70.0,
+  "cost_weights": {
+    "beta": 10.0,
+    "chi": 10.0,
+    "kappa": 0.1,
+    "mu": 0.2
+  },
+  "dt_ns": 2.0,
+  "gamma": 1.5707963267948966,
+  "horizons_ns": [
+    70.0
+  ],
+  "lr": 0.03,
+  "max_time_ns": 180.0,
+  "nominal_boundary_cost": 0.004280737055555739,
+  "nominal_cost": 0.15757516180135928,
+  "nominal_fidelity": 0.9966196279490397,
+  "nominal_leakage": 0.00028240375695337327,
+  "nominal_leakage_boundary": 2.0843177999595752e-05,
+  "nominal_leakage_integral": 0.00026156057895377753,
+  "nominal_time_cost": 0.11666666666666668,
+  "nominal_time_ns": 70.0,
+  "objective_cost": 2.203889913927633,
+  "per_horizon": [
+    {
+      "elapsed_seconds": 99.09,
+      "horizon_ns": 70.0,
+      "nominal_boundary_cost": 0.004280737055555739,
+      "nominal_cost": 0.15757516180135928,
+      "nominal_fidelity": 0.9966196279490397,
+      "nominal_leakage": 0.00028240375695337327,
+      "nominal_leakage_boundary": 2.0843177999595752e-05,
+      "nominal_leakage_integral": 0.00026156057895377753,
+      "nominal_time_cost": 0.11666666666666668,
+      "nominal_time_ns": 70.0,
+      "optimizer_cost": 2.203889913927633
+    }
+  ],
+  "plan_path": "final_results/adam_noise_70ns\\best_control_plan.npz",
+  "robustness": {
+    "sigma_1p0": {
+      "average_fidelity": 0.9769792858734097,
+      "average_gate_fidelity": 0.9712241073417622,
+      "fidelity_variance": 0.0001239157763764237,
+      "num_samples": 60,
+      "sigma_mhz": 1.0
+    }
+  },
+  "robustness_path": "final_results/adam_noise_70ns\\robustness\\best_robustness.json",
+  "robustness_samples": 60,
+  "robustness_sigma_1p0_average_fidelity": 0.9769792858734097,
+  "robustness_sigma_1p0_average_gate_fidelity": 0.9712241073417622,
+  "robustness_sigma_1p0_fidelity_variance": 0.0001239157763764237,
+  "robustness_sigmas": [
+    1.0
+  ],
+  "runtime_norm_ns": 60.0,
+  "seed": 2,
+  "termination_cost": 0.15,
+  "total_elapsed_seconds": 99.72,
+  "train_noise_samples": 1,
+  "train_noise_std_mhz": 1.0
+}

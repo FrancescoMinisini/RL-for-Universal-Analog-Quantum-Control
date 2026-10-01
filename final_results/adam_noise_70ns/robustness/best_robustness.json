@@ -1,0 +1,19 @@
+{
+  "alpha": 2.2,
+  "best_horizon_ns": 70.0,
+  "gamma": 1.5707963267948966,
+  "nominal_cost": 0.15757516180135928,
+  "nominal_fidelity": 0.9966196279490397,
+  "nominal_leakage": 0.00028240375695337327,
+  "nominal_time_ns": 70.0,
+  "plan_path": "final_results/adam_noise_70ns\\best_control_plan.npz",
+  "robustness": {
+    "sigma_1p0": {
+      "average_fidelity": 0.9769792858734097,
+      "average_gate_fidelity": 0.9712241073417622,
+      "fidelity_variance": 0.0001239157763764237,
+      "num_samples": 60,
+      "sigma_mhz": 1.0
+    }
+  }
+}

@@ -7,9 +7,23 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Column prefix in the combined CSV -> method subdirectory written by benchmark_robustness.py.
 # The Adam plan evaluated in each sweep lives under a different subdirectory name.
+#
+# WARNING: in robustness_analysis/ and robustness_analysis_2/ the "noise" plan
+# (final_results/noise/) targets N(0, 0, pi/2), not N(2.2, 2.2, pi/2), and the "adam" plan of
+# robustness_analysis_2/ (final_results/adam_test/) targets N(0.2, 0.2, pi/2); each is scored
+# against its own target. Those two sweeps are kept only because the submitted thesis plots
+# them. robustness_analysis_3/ evaluates only plans for N(2.2, 2.2, pi/2) and is the one the
+# preprint uses.
 SWEEPS = {
     "final_results/robustness_analysis": {"adam": "adam_noise", "nominal": "nominal", "noise": "noise"},
     "final_results/robustness_analysis_2": {"adam": "adam_test", "nominal": "nominal", "noise": "noise"},
+    "final_results/robustness_analysis_3": {
+        "adam70": "adam_70ns",
+        "adam60": "adam_60ns",
+        "nominal": "trpo_nominal",
+        "noise": "trpo_noise",
+        "noise91": "trpo_noise_it091",
+    },
 }
 
 

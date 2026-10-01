@@ -26,7 +26,8 @@ This document provides a description of each file in the repository, along with 
 | `uqc/eval.py` | Utilities for deterministic rollout, control plan management, and robustness evaluation. |
 | `uqc/noise_response.py` | First-order (filter-function) response of a plan to control noise with any covariance, and a Monte Carlo replay with correlated noise. |
 | `uqc/operators.py` | Definitions of quantum operators (Pauli matrices, projection operators). |
-| `uqc/parallel.py` | Multi-processed batch collection for RL training. |
+| `uqc/batched_env.py` | `BatchedQuantumControlEnv`: the environment of `uqc/env.py` for many episodes at once (torch, double precision), used by `train_trpo_single_target.py --engine batched`. |
+| `uqc/parallel.py` | Multi-processed batch collection for RL training, with the scalar or the batched environment. |
 | `uqc/utils.py` | Logging, directory handling, and math expression parsing. |
 
 ## Analysis Scripts (`analysis/` directory)
@@ -46,6 +47,7 @@ These turn the runs stored in `final_results/<exp>/` into the CSVs and figures i
 | `analysis/closed_loop_vs_open_loop.py` | Checkpoints of both runs acting in closed loop on the noisy propagator versus their open-loop plans -> `final_results/closed_loop_results/`. |
 | `analysis/white_noise_first_order.py` | First-order infidelity rate of the white-noise model, computed from the operators, against the measured rates -> `final_results/white_noise_results/`. |
 | `analysis/white_noise_checks.py` | Exact first-order rate of every plan; Monte Carlo checks per channel, per noise interval and for noise injected before the filter -> `final_results/white_noise_results/`. About ten minutes. |
+| `analysis/batched_env_checks.py` | Compares the batched environment with the scalar one step by step, replays batched rollouts in the scalar environment, and checks the vectorized advantage computation. Prints the differences; writes no files. About a minute. |
 | `analysis/noise_with_memory.py` | Quasi-static and exponentially correlated noise on every stored plan and on the Adam noise-model pulses -> `final_results/noise_memory_results/`. Parallel (`--workers`). |
 | `analysis/exchange_area_bound.py` | Shortest time in which the filtered, bounded coupling delivers the exchange area of each target (linear program) -> `final_results/gate_structure_results/`. |
 | `analysis/compute_budget.py` | Simulator steps spent by the single-target controllers -> `final_results/compute_budget_results/`. |

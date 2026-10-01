@@ -15,9 +15,10 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 import numpy as np
 import torch
 
+from .batched_env import BatchedQuantumControlEnv
 from .env import EnvConfig, QuantumControlEnv
 from .physics import GmonSystem, GmonSystemConfig
-from .trpo import TRPOAgent, TRPOConfig
+from .trpo import PolicyNetwork, TRPOAgent, TRPOConfig
 
 
 torch.set_num_threads(1)
@@ -62,6 +63,28 @@ def _worker_collect(
             )
         finals.append(rollout["final_info"])
     return transitions, finals
+
+
+BATCHED_EPISODES_PER_TASK = 250
+
+
+def _worker_collect_batched(
+    system_config: GmonSystemConfig,
+    env_config: EnvConfig,
+    trpo_config: TRPOConfig,
+    policy_state: Dict[str, torch.Tensor],
+    episodes: int,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    torch.set_num_threads(1)
+    try:
+        torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+    env = BatchedQuantumControlEnv(GmonSystem(system_config), env_config, int(episodes))
+    policy = PolicyNetwork(env.observation_dim, env.action_dim, trpo_config.hidden_sizes, trpo_config.init_log_std)
+    policy.load_state_dict(policy_state)
+    policy.eval()
+    return env.rollout(policy)
 
 
 class ParallelBatchCollector:
@@ -135,3 +158,35 @@ class ParallelBatchCollector:
             transitions.extend(tr)
             finals.extend(fi)
         return transitions, finals
+
+    def collect_batched(self, agent: TRPOAgent, episodes_per_batch: int) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+        """
+        Same batch as collect(), from BatchedQuantumControlEnv: every task steps all of its
+        episodes together. Returns flat arrays for TRPOAgent.update_from_batch and the final
+        infos as arrays, in task order.
+
+        The task size does not depend on the number of workers (BATCHED_EPISODES_PER_TASK unless
+        episodes_per_task is set), so a batch depends only on the seed. It also keeps the result
+        of a task small: Windows pipes fail on messages of about 100 MB.
+        """
+        policy_state = {k: v.detach().cpu() for k, v in agent.policy.state_dict().items()}
+        chunk = int(self.episodes_per_task) if (self.episodes_per_task is not None and self.episodes_per_task > 0) else BATCHED_EPISODES_PER_TASK
+        sizes = [min(chunk, int(episodes_per_batch) - i) for i in range(0, int(episodes_per_batch), chunk)]
+        if len(sizes) > 100:
+            raise ValueError("More than 100 tasks per batch: their seeds would overlap with the next batch. Raise episodes_per_task.")
+        tasks = []
+        for task_id, episodes in enumerate(sizes):
+            task_seed = self.seed + self.batch_index * 100_000 + task_id * 1_000
+            tasks.append((self.system_config, replace(self.env_config, seed=task_seed), self.trpo_config, policy_state, episodes))
+        self.batch_index += 1
+        if self.num_workers <= 1:
+            results = [_worker_collect_batched(*task) for task in tasks]
+        else:
+            if self.executor is None:
+                self.__enter__()
+            assert self.executor is not None
+            futures = [self.executor.submit(_worker_collect_batched, *task) for task in tasks]
+            results = [fut.result() for fut in futures]
+        batch = {k: np.concatenate([r[0][k] for r in results]) for k in results[0][0]}
+        finals = {k: np.concatenate([r[1][k] for r in results]) for k in results[0][1]}
+        return batch, finals

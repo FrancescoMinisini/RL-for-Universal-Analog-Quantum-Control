@@ -40,6 +40,16 @@ Run the scripts from the repository root so that the `uqc` package is importable
 scripts force CPU-only, single-threaded Torch and BLAS through environment variables. Parallelism
 comes from `--num-workers` rollout processes instead.
 
+`train_trpo_single_target.py` has a faster engine, `--engine batched`: each worker steps all of its
+episodes together (`uqc/batched_env.py`), with the same physics in double precision but different
+random streams, so a batched run is not a sample-by-sample repeat of a scalar one. With
+`--update-device cuda` the TRPO update runs on a GPU; this needs a CUDA build of Torch
+(`pip install torch --index-url https://download.pytorch.org/whl/cu121`), while rollouts, evaluation
+and checkpoints stay on the CPU. One iteration of 10 000 episodes of 180 ns takes about 9 minutes with
+the default engine, 2.5 minutes with the batched one and 25 seconds with the batched one and the
+update on a GTX 1650 Ti (6 workers). `python analysis/batched_env_checks.py` compares the two engines
+step by step.
+
 A training run that finishes in about ten seconds, useful as a smoke test:
 
 ```bash
@@ -50,7 +60,7 @@ python train_trpo_single_target.py --alpha 2.2 --iterations 2 --episodes-per-bat
 
 | Path | Content |
 | --- | --- |
-| `uqc/` | library: physics (`physics.py`), environment (`env.py`), TRPO agent (`trpo.py`), Adam baseline (`baseline_adam.py`), evaluation and control plans (`eval.py`), parallel rollouts (`parallel.py`) |
+| `uqc/` | library: physics (`physics.py`), environment (`env.py`), TRPO agent (`trpo.py`), Adam baseline (`baseline_adam.py`), evaluation and control plans (`eval.py`), parallel rollouts (`parallel.py`), batched environment (`batched_env.py`) |
 | `train_*.py`, `benchmark_robustness.py`, `run_param_search.py` | experiment entry points |
 | `analysis/` | turn `final_results/` into the CSVs and figures used by the thesis |
 | `final_results/` | the runs retained for the thesis and their processed data — see [`final_results/README.md`](final_results/README.md) |
@@ -66,6 +76,10 @@ Angles accept expressions such as `pi/2`. The training and evaluation scripts li
 ```bash
 # single target, trained with 1 MHz control noise
 python train_trpo_single_target.py --alpha 2.2 --gamma pi/2 --noise-optimized --out runs/trpo_2p2_noise
+# the same with the batched engine, the update on the GPU, and the leakage bound of the training
+# cost taken from the noise-free controls
+python train_trpo_single_target.py --alpha 2.2 --gamma pi/2 --noise-optimized --leakage-bound nominal \
+  --engine batched --update-device cuda --num-workers 6 --out runs/trpo_2p2_noise_nominal_leakage
 
 # curriculum runtime sweep over N(alpha, alpha, gamma)
 python train_trpo_runtime.py --gammas pi/2 --out runs/runtime_sweep

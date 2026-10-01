@@ -7,7 +7,10 @@ import os
 import sys
 from typing import Any, Dict, List, Tuple
 
-# Keep Torch CPU-only and single-threaded in this environment.
+# Keep Torch CPU-only and single-threaded in this environment, unless the update is asked on the GPU.
+_argv = " ".join(sys.argv)
+if "--update-device cuda" in _argv or "--update-device=cuda" in _argv:
+    os.environ["CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES") or "0"
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
@@ -56,7 +59,7 @@ def collect_batch(
 
 
 def summarize_final_infos(finals: List[Dict[str, float]]) -> Dict[str, float]:
-    if not finals:
+    if len(finals) == 0:
         return {
             "avg_cost": float("nan"),
             "avg_fidelity": float("nan"),
@@ -71,7 +74,10 @@ def summarize_final_infos(finals: List[Dict[str, float]]) -> Dict[str, float]:
     keys = ["cost", "fidelity", "leakage", "time_ns", "boundary_cost", "time_cost", "min_cost", "min_cost_time_ns"]
     out: Dict[str, float] = {}
     for key in keys:
-        vals = [float(info.get(key, np.nan)) for info in finals]
+        if isinstance(finals, dict):  # arrays from the batched engine
+            vals = np.asarray(finals[key], dtype=np.float64)
+        else:
+            vals = [float(info.get(key, np.nan)) for info in finals]
         out[f"avg_{key}"] = float(np.nanmean(vals))
         if key == "min_cost_time_ns":
             out[f"std_{key}"] = float(np.nanstd(vals))
@@ -264,6 +270,32 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=1, help="Parallel rollout workers for batch collection.")
     parser.add_argument("--episodes-per-task", type=int, default=0, help="Episodes per worker task; 0 chooses automatically.")
     parser.add_argument(
+        "--engine",
+        choices=["scalar", "batched"],
+        default="scalar",
+        help="scalar: one episode at a time (uqc.env); batched: every worker steps all of its episodes "
+             "together (uqc.batched_env), same physics in double precision, different random streams.",
+    )
+    parser.add_argument(
+        "--update-device",
+        choices=["cpu", "cuda"],
+        default="cpu",
+        help="Device of the TRPO update. Rollouts, evaluation and checkpoints stay on the CPU.",
+    )
+    parser.add_argument(
+        "--update-chunk",
+        type=int,
+        default=0,
+        help="Transitions per chunk in the update; 0 = whole batch on the CPU, 200000 on the GPU.",
+    )
+    parser.add_argument(
+        "--leakage-bound",
+        choices=["noisy", "nominal"],
+        default="noisy",
+        help="noisy: the leakage bound of the training cost is accumulated from the noisy Hamiltonian; "
+             "nominal: from the noise-free controls, as in train_adam_noise_models.py.",
+    )
+    parser.add_argument(
         "--robustness-sigmas",
         type=str,
         default="1.0",
@@ -298,6 +330,12 @@ def main() -> None:
         # Force output to the resume directory to avoid writing to outdated paths
         # that might be stored in the resumed args.json
         args.out = args.resume
+
+    if args.update_device == "cuda" and not torch.cuda.is_available():
+        raise SystemExit(
+            "--update-device cuda: CUDA is not available. It needs a CUDA build of torch, and the flag must be "
+            "given on the command line (also with --resume), because the GPU is hidden otherwise."
+        )
 
     alpha = parse_angle_expr(args.alpha)
     gamma = parse_angle_expr(args.gamma)
@@ -342,6 +380,7 @@ def main() -> None:
             reward_mode=args.reward_mode,
             termination_cost=args.termination_cost,
             runtime_norm_ns=args.runtime_norm_ns,
+            leakage_from_nominal_controls=args.leakage_bound == "nominal",
             cost_weights=weights,
             seed=args.seed,
         ),
@@ -373,7 +412,14 @@ def main() -> None:
         init_log_std=args.init_log_std,
         hidden_sizes=tuple(args.hidden_sizes),
     )
-    agent = TRPOAgent(train_env.observation_dim, train_env.action_dim, config=trpo_cfg)
+    update_chunk = args.update_chunk if args.update_chunk > 0 else (200_000 if args.update_device == "cuda" else None)
+    agent = TRPOAgent(
+        train_env.observation_dim,
+        train_env.action_dim,
+        config=trpo_cfg,
+        device=args.update_device,
+        update_chunk_size=update_chunk,
+    )
 
     start_iteration = 0
     if args.resume:
@@ -420,12 +466,15 @@ def main() -> None:
 
     with collector:
         for iteration in range(start_iteration + 1, args.iterations + 1):
-            if args.num_workers > 1:
-                transitions, finals = collector.collect(agent, args.episodes_per_batch)
+            if args.engine == "batched":
+                batch, finals = collector.collect_batched(agent, args.episodes_per_batch)
+                update_info = agent.update_from_batch(batch)
             else:
-                transitions, finals = collect_batch(train_env, agent, args.episodes_per_batch)
-
-            update_info = agent.update(transitions)
+                if args.num_workers > 1:
+                    transitions, finals = collector.collect(agent, args.episodes_per_batch)
+                else:
+                    transitions, finals = collect_batch(train_env, agent, args.episodes_per_batch)
+                update_info = agent.update(transitions)
             train_stats = summarize_final_infos(finals)
 
             iter_ckpt_path = os.path.join(checkpoints_dir, f"iter_{iteration:06d}.pt")

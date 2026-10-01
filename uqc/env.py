@@ -22,6 +22,8 @@ class EnvConfig:
     filter_bandwidth_mhz: float = 10.0
     runtime_norm_ns: float = 60.0
     min_fidelity: float | None = None
+    # Accumulate the leakage bound from the noise-free controls instead of the noisy Hamiltonian.
+    leakage_from_nominal_controls: bool = False
     seed: int | None = None
     cost_weights: UFOCostWeights = UFOCostWeights()
 
@@ -158,7 +160,11 @@ class QuantumControlEnv:
         self.current_eta_mhz = eta_mhz
         H = self.system.hamiltonian(noisy_controls, eta_mhz)
         self.U = scipy_expm_step(self.U, H, self.system.dt_ns)
-        self.leakage.step(H, eta_mhz)
+        if self.config.leakage_from_nominal_controls and self.config.noise_optimized:
+            eta_nominal = self.system.config.eta_base_mhz
+            self.leakage.step(self.system.hamiltonian(filtered, eta_nominal), eta_nominal)
+        else:
+            self.leakage.step(H, eta_mhz)
         self.nominal_controls_history.append(filtered.copy())
         self.noisy_controls_history.append(noisy_controls.copy())
 

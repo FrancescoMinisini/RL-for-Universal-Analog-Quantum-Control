@@ -133,10 +133,31 @@ class ValueNetwork(nn.Module):
         return self.value(feat).squeeze(-1)
 
 
+def _to_cpu(obj):
+    if isinstance(obj, torch.Tensor):
+        return obj.detach().cpu()
+    if isinstance(obj, dict):
+        return {k: _to_cpu(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_to_cpu(v) for v in obj]
+    return obj
+
+
 class TRPOAgent:
-    def __init__(self, obs_dim: int, act_dim: int, config: TRPOConfig | None = None, device: str = "cpu"):
+    def __init__(
+        self,
+        obs_dim: int,
+        act_dim: int,
+        config: TRPOConfig | None = None,
+        device: str = "cpu",
+        update_chunk_size: int | None = None,
+    ):
         self.config = config or TRPOConfig()
         self.device = torch.device(device)
+        # With a chunk size, the update accumulates every batch average over chunks of that many
+        # transitions, which bounds its memory (needed on a small GPU). The result differs from
+        # the unchunked one only by the order of the floating-point sums.
+        self.update_chunk_size = update_chunk_size
         self.policy = PolicyNetwork(obs_dim, act_dim, self.config.hidden_sizes, self.config.init_log_std).to(self.device)
         self.value_net = ValueNetwork(obs_dim, self.config.hidden_sizes).to(self.device)
         self.value_optim = optim.Adam(self.value_net.parameters(), lr=self.config.value_lr)
@@ -164,20 +185,39 @@ class TRPOAgent:
         return {"obs": obs, "raw_actions": raw_actions, "rewards": rewards, "masks": masks}
 
     def compute_returns_advantages(self, rewards: Tensor, values: Tensor, masks: Tensor) -> Tuple[Tensor, Tensor]:
+        # The backward recurrence restarts at every mask == 0, so the episodes are independent:
+        # lay them out as columns of a [time, episode] array and run it over time for all of them
+        # at once. Padding has reward, value and mask 0 and leaves the recurrence at zero.
         n = rewards.shape[0]
-        returns = torch.zeros_like(rewards)
-        adv = torch.zeros_like(rewards)
-        gae = torch.zeros((), dtype=rewards.dtype, device=rewards.device)
-        running_return = torch.zeros((), dtype=rewards.dtype, device=rewards.device)
-        next_value = torch.zeros((), dtype=rewards.dtype, device=rewards.device)
+        ends = masks == 0
+        ends[-1] = True
+        end_idx = torch.nonzero(ends).squeeze(-1)
+        start_idx = torch.cat([end_idx.new_zeros(1), end_idx[:-1] + 1])
+        episode = torch.cumsum(ends.to(torch.long), dim=0) - ends.to(torch.long)
+        pos = torch.arange(n, device=rewards.device) - start_idx[episode]
+        horizon = int((end_idx - start_idx).max().item()) + 1
 
-        for t in reversed(range(n)):
-            running_return = rewards[t] + self.config.gamma * running_return * masks[t]
-            returns[t] = running_return
-            delta = rewards[t] + self.config.gamma * next_value * masks[t] - values[t]
-            gae = delta + self.config.gamma * self.config.lam * masks[t] * gae
-            adv[t] = gae
-            next_value = values[t]
+        def padded(x: Tensor) -> Tensor:
+            out = torch.zeros((horizon, end_idx.shape[0]), dtype=x.dtype, device=x.device)
+            out[pos, episode] = x
+            return out
+
+        r, v, m = padded(rewards), padded(values), padded(masks)
+        ret = torch.zeros_like(r)
+        adv_p = torch.zeros_like(r)
+        gae = torch.zeros_like(r[0])
+        running_return = torch.zeros_like(r[0])
+        next_value = torch.zeros_like(r[0])
+        for t in reversed(range(horizon)):
+            running_return = r[t] + self.config.gamma * running_return * m[t]
+            ret[t] = running_return
+            delta = r[t] + self.config.gamma * next_value * m[t] - v[t]
+            gae = delta + self.config.gamma * self.config.lam * m[t] * gae
+            adv_p[t] = gae
+            next_value = v[t]
+        returns = ret[pos, episode]
+        adv = adv_p[pos, episode]
+
         adv_std = adv.std(unbiased=False)
         if not torch.isfinite(adv_std) or float(adv_std.item()) < 1e-12:
             adv = adv - adv.mean()
@@ -188,52 +228,71 @@ class TRPOAgent:
     def update(self, rollouts: Sequence[Dict[str, object]]) -> Dict[str, float]:
         if not rollouts:
             return {"updated": 0.0, "policy_loss": 0.0, "value_loss": 0.0, "kl": 0.0}
+        return self.update_from_batch(self._prepare_batch(rollouts))
 
-        batch = self._prepare_batch(rollouts)
-        obs = batch["obs"]
-        raw_actions = batch["raw_actions"]
-        rewards = batch["rewards"]
-        masks = batch["masks"]
+    def update_from_batch(self, batch: Dict[str, object]) -> Dict[str, float]:
+        """batch: flat arrays or tensors "obs", "raw_actions", "rewards", "masks", episode after episode."""
+        obs = torch.as_tensor(batch["obs"], dtype=torch.float32, device=self.device)
+        raw_actions = torch.as_tensor(batch["raw_actions"], dtype=torch.float32, device=self.device)
+        rewards = torch.as_tensor(batch["rewards"], dtype=torch.float32, device=self.device)
+        masks = torch.as_tensor(batch["masks"], dtype=torch.float32, device=self.device)
+        n = obs.shape[0]
+        if n == 0:
+            return {"updated": 0.0, "policy_loss": 0.0, "value_loss": 0.0, "kl": 0.0}
+
+        chunk = self.update_chunk_size
+        if chunk is None or chunk <= 0 or chunk >= n:
+            slices = [slice(0, n)]
+        else:
+            slices = [slice(i, min(i + chunk, n)) for i in range(0, n, chunk)]
+
+        def batch_mean(per_sample: Tensor) -> Tensor:
+            # Contribution of one chunk to the average over the whole batch.
+            return per_sample.mean() if len(slices) == 1 else per_sample.sum() / n
 
         with torch.no_grad():
-            values_old = self.value_net(obs)
+            values_old = torch.cat([self.value_net(obs[sl]) for sl in slices])
             returns, advantages = self.compute_returns_advantages(rewards, values_old, masks)
-            old_mean, old_std = self.policy(obs)
-            old_dist = torch.distributions.Normal(old_mean, old_std)
-            old_log_probs = old_dist.log_prob(raw_actions).sum(dim=-1)
+            old_mean = torch.cat([self.policy(obs[sl])[0] for sl in slices])
+            old_std = torch.exp(self.policy.log_std).clone()
+            old_log_probs = torch.distributions.Normal(old_mean, old_std).log_prob(raw_actions).sum(dim=-1)
 
-        def surrogate_loss(no_grad: bool = False) -> Tensor:
-            if no_grad:
-                with torch.no_grad():
-                    mean, std = self.policy(obs)
-            else:
-                mean, std = self.policy(obs)
+        def surrogate_terms(sl: slice) -> Tensor:
+            mean, std = self.policy(obs[sl])
             dist = torch.distributions.Normal(mean, std)
-            log_probs = dist.log_prob(raw_actions).sum(dim=-1)
-            ratio = torch.exp(log_probs - old_log_probs)
-            return -(ratio * advantages).mean()
+            log_probs = dist.log_prob(raw_actions[sl]).sum(dim=-1)
+            ratio = torch.exp(log_probs - old_log_probs[sl])
+            return -(ratio * advantages[sl])
 
-        def mean_kl() -> Tensor:
-            mean, std = self.policy(obs)
+        def kl_terms(sl: slice) -> Tensor:
+            mean, std = self.policy(obs[sl])
             new_dist = torch.distributions.Normal(mean, std)
-            old_dist_detached = torch.distributions.Normal(old_mean.detach(), old_std.detach())
-            kl = torch.distributions.kl_divergence(old_dist_detached, new_dist).sum(dim=-1).mean()
-            return kl
+            old_dist = torch.distributions.Normal(old_mean[sl], old_std)
+            return torch.distributions.kl_divergence(old_dist, new_dist).sum(dim=-1)
 
-        loss = surrogate_loss()
+        def evaluate_no_grad(terms: Callable[[slice], Tensor]) -> float:
+            with torch.no_grad():
+                return float(sum(batch_mean(terms(sl)) for sl in slices).item())
+
         params = list(self.policy.parameters())
-        grads = torch.autograd.grad(loss, params)
-        loss_grad = flat_grad(grads, params)
+        old_loss = 0.0
+        loss_grad = torch.zeros_like(flat_params(params))
+        for sl in slices:
+            loss = batch_mean(surrogate_terms(sl))
+            loss_grad = loss_grad + flat_grad(torch.autograd.grad(loss, params), params)
+            old_loss += float(loss.item())
 
         if torch.norm(loss_grad) < 1e-12:
-            return {"updated": 0.0, "policy_loss": float(loss.item()), "value_loss": 0.0, "kl": 0.0}
+            return {"updated": 0.0, "policy_loss": old_loss, "value_loss": 0.0, "kl": 0.0}
 
         def fisher_vector_product(v: Tensor) -> Tensor:
-            kl = mean_kl()
-            grad_kl = flat_grad(torch.autograd.grad(kl, params, create_graph=True), params)
-            kl_v = (grad_kl * v).sum()
-            grad2 = flat_grad(torch.autograd.grad(kl_v, params), params)
-            return grad2 + self.config.damping * v
+            out = torch.zeros_like(v)
+            for sl in slices:
+                kl = batch_mean(kl_terms(sl))
+                grad_kl = flat_grad(torch.autograd.grad(kl, params, create_graph=True), params)
+                kl_v = (grad_kl * v).sum()
+                out = out + flat_grad(torch.autograd.grad(kl_v, params), params)
+            return out + self.config.damping * v
 
         step_dir = conjugate_gradient(
             fisher_vector_product,
@@ -245,12 +304,11 @@ class TRPOAgent:
         fvp_step = fisher_vector_product(step_dir)
         shs = 0.5 * (step_dir * fvp_step).sum()
         if torch.isnan(shs) or shs <= 0:
-            return {"updated": 0.0, "policy_loss": float(loss.item()), "value_loss": 0.0, "kl": 0.0}
+            return {"updated": 0.0, "policy_loss": old_loss, "value_loss": 0.0, "kl": 0.0}
 
         scale = torch.sqrt(shs / self.config.max_kl)
         full_step = step_dir / (scale + 1e-12)
         old_params = flat_params(params).clone()
-        old_loss = float(loss.item())
 
         accepted = False
         final_kl = 0.0
@@ -258,8 +316,8 @@ class TRPOAgent:
             stepfrac = self.config.backtrack_coeff ** j
             new_params = old_params + stepfrac * full_step
             set_params(params, new_params)
-            new_loss = float(surrogate_loss(no_grad=True).item())
-            new_kl = float(mean_kl().item())
+            new_loss = evaluate_no_grad(surrogate_terms)
+            new_kl = evaluate_no_grad(kl_terms)
             improvement = old_loss - new_loss
             if improvement > 0 and new_kl <= self.config.max_kl:
                 accepted = True
@@ -267,16 +325,18 @@ class TRPOAgent:
                 break
         if not accepted:
             set_params(params, old_params)
-            final_kl = float(mean_kl().item())
+            final_kl = evaluate_no_grad(kl_terms)
 
         value_loss_scalar = 0.0
         for _ in range(self.config.value_epochs):
-            pred = self.value_net(obs)
-            value_loss = torch.mean((pred - returns) ** 2)
             self.value_optim.zero_grad(set_to_none=True)
-            value_loss.backward()
+            value_loss_scalar = 0.0
+            for sl in slices:
+                pred = self.value_net(obs[sl])
+                value_loss = batch_mean((pred - returns[sl]) ** 2)
+                value_loss.backward()
+                value_loss_scalar += float(value_loss.item())
             self.value_optim.step()
-            value_loss_scalar = float(value_loss.item())
 
         return {
             "updated": 1.0 if accepted else 0.0,
@@ -286,10 +346,11 @@ class TRPOAgent:
         }
 
     def state_dict(self) -> Dict[str, object]:
+        # Always on the CPU, so that checkpoints do not depend on the device of the update.
         return {
-            "policy": self.policy.state_dict(),
-            "value_net": self.value_net.state_dict(),
-            "value_optim": self.value_optim.state_dict(),
+            "policy": _to_cpu(self.policy.state_dict()),
+            "value_net": _to_cpu(self.value_net.state_dict()),
+            "value_optim": _to_cpu(self.value_optim.state_dict()),
             "config": self.config.__dict__,
         }
 

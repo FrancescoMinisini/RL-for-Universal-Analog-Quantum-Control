@@ -1,0 +1,23 @@
+{
+  "alpha": 2.2,
+  "best_ckpt_path": "runs\\matched_nominal_seed2\\best_agent.pt",
+  "best_eval_cost": 0.3599736935997891,
+  "best_eval_fidelity": 0.992717467408881,
+  "best_eval_leakage": 0.0005781618180344915,
+  "best_eval_min_cost": 0.3599736935997891,
+  "best_eval_min_cost_time_ns": 102.0,
+  "best_eval_time_ns": 102.0,
+  "best_plan_path": "runs\\matched_nominal_seed2\\best_control_plan.npz",
+  "episodes_per_batch": 10000,
+  "final_ckpt_path": "runs\\matched_nominal_seed2\\final_agent.pt",
+  "final_plan_path": "runs\\matched_nominal_seed2\\final_control_plan.npz",
+  "gamma": 1.5707963267948966,
+  "init_checkpoint": null,
+  "iterations": 100,
+  "last_robustness_path": "runs\\matched_nominal_seed2\\robustness\\iter_000100_robustness.json",
+  "noise_optimized": false,
+  "robustness_samples": 60,
+  "robustness_sigmas": [
+    1.0
+  ]
+}

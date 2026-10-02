@@ -1,0 +1,19 @@
+{
+  "alpha": 2.2,
+  "eval_cost": 0.3983484194430774,
+  "eval_fidelity": 0.986185713927991,
+  "eval_leakage": 0.0016247978914399079,
+  "eval_plan_path": "runs\\matched_noise_nomleak_seed2\\plans\\iter_000086_control_plan.npz",
+  "eval_time_ns": 116.0,
+  "gamma": 1.5707963267948966,
+  "iteration": 86,
+  "robustness": {
+    "sigma_1p0": {
+      "average_fidelity": 0.9557952451988037,
+      "average_gate_fidelity": 0.9447440564985048,
+      "fidelity_variance": 0.00046763458447809497,
+      "num_samples": 60,
+      "sigma_mhz": 1.0
+    }
+  }
+}

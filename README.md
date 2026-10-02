@@ -81,6 +81,10 @@ python train_trpo_single_target.py --alpha 2.2 --gamma pi/2 --noise-optimized --
 python train_trpo_single_target.py --alpha 2.2 --gamma pi/2 --noise-optimized --leakage-bound nominal \
   --engine batched --update-device cuda --num-workers 6 --out runs/trpo_2p2_noise_nominal_leakage
 
+# matched nominal / noise-trained pairs for seeds 1-3 with those settings, one run after the other;
+# launch it again after an interruption and it continues where it stopped (--status shows the progress)
+python run_matched_retraining.py
+
 # curriculum runtime sweep over N(alpha, alpha, gamma)
 python train_trpo_runtime.py --gammas pi/2 --out runs/runtime_sweep
 

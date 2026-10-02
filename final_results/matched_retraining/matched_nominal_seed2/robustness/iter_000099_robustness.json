@@ -1,0 +1,19 @@
+{
+  "alpha": 2.2,
+  "eval_cost": 0.37706901309169605,
+  "eval_fidelity": 0.987914047588204,
+  "eval_leakage": 0.0018257728364222106,
+  "eval_plan_path": "runs\\matched_nominal_seed2\\plans\\iter_000099_control_plan.npz",
+  "eval_time_ns": 96.0,
+  "gamma": 1.5707963267948966,
+  "iteration": 99,
+  "robustness": {
+    "sigma_1p0": {
+      "average_fidelity": 0.9631757586565094,
+      "average_gate_fidelity": 0.9539696983206369,
+      "fidelity_variance": 0.0002632759456793738,
+      "num_samples": 60,
+      "sigma_mhz": 1.0
+    }
+  }
+}

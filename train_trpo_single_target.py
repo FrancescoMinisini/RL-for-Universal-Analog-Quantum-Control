@@ -426,9 +426,23 @@ def main() -> None:
         checkpoints_dir_res = os.path.join(args.resume, "checkpoints")
         if os.path.isdir(checkpoints_dir_res):
             ckpt_files = glob.glob(os.path.join(checkpoints_dir_res, "iter_*.pt"))
+            # An iteration counts as done once it is in the log, which is written after its
+            # checkpoint, evaluation and plan. A run killed in between has a checkpoint that was
+            # never evaluated (or is half written): restart from the last logged iteration instead.
+            last_logged = 0
+            log_path_res = os.path.join(args.resume, "training_log.jsonl")
+            if os.path.exists(log_path_res):
+                with open(log_path_res, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            last_logged = max(last_logged, int(json.loads(line).get("iteration", 0)))
+                        except ValueError:
+                            pass
+            ckpt_iter = lambda p: int(os.path.basename(p).replace("iter_", "").replace(".pt", ""))
+            ckpt_files = [p for p in ckpt_files if ckpt_iter(p) <= last_logged]
             if ckpt_files:
-                latest_ckpt_path = max(ckpt_files, key=lambda p: int(os.path.basename(p).replace("iter_", "").replace(".pt", "")))
-                last_iter = int(os.path.basename(latest_ckpt_path).replace("iter_", "").replace(".pt", ""))
+                latest_ckpt_path = max(ckpt_files, key=ckpt_iter)
+                last_iter = ckpt_iter(latest_ckpt_path)
                 print(f"Resuming from checkpoint: {latest_ckpt_path} at iteration {last_iter}", flush=True)
                 args.init_checkpoint = latest_ckpt_path
                 start_iteration = last_iter
@@ -449,6 +463,14 @@ def main() -> None:
                     best_eval_cost = float(old_summary.get("best_eval_cost", float("inf")))
                 except:
                     pass
+        else:
+            # Interrupted run: no summary yet, so recover the best cost from the log, which was
+            # truncated to the resumed iteration above. best_control_plan.npz is still on disk.
+            log_path = os.path.join(args.resume, "training_log.jsonl")
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8") as f:
+                    costs = [json.loads(line).get("eval_cost") for line in f if line.strip()]
+                best_eval_cost = min([float(c) for c in costs if c is not None], default=float("inf"))
 
     best_plan_path = os.path.join(args.out, "best_control_plan.npz")
     best_ckpt_path = os.path.join(args.out, "best_agent.pt")
@@ -463,6 +485,10 @@ def main() -> None:
         episodes_per_task=(None if args.episodes_per_task <= 0 else args.episodes_per_task),
         seed=args.seed,
     )
+    if args.engine == "batched":
+        # The batched rollouts draw only from generators seeded per batch, so continuing the
+        # batch count makes a resumed run identical to an uninterrupted one.
+        collector.batch_index = start_iteration
 
     with collector:
         for iteration in range(start_iteration + 1, args.iterations + 1):

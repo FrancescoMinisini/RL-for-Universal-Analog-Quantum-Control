@@ -195,6 +195,8 @@ def summarize_adam(rows, prefix="adam"):
         reference = next(r for r in rows if r["source"] == f"{prefix}_none" and r["time_ns"] == horizon)
         for model in ADAM_MODELS:
             sel = [r for r in rows if r["source"] == f"{prefix}_{model}" and r["time_ns"] == horizon]
+            if not sel:  # a run restricted to some of the models (train_adam_noise_models.py --models)
+                continue
             rec = {"model": model, "horizon_ns": horizon, "n_runs": len(sel)}
             for key in ("nominal_fidelity", "nominal_cost", "white_first_order_1mhz", "white_excess_1mhz",
                         "white_average_fidelity_1mhz", "quasi_static_first_order_0p1mhz",

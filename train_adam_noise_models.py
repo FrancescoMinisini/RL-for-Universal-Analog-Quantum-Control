@@ -16,7 +16,9 @@ train_adam_baseline.py every plan is stored.
 By default every term of the objective is evaluated on the noisy trajectory, as in the TRPO
 environment, including the leakage bound, which responds strongly to white noise. With
 --leakage-bound nominal the bound is accumulated from the noise-free controls instead, so that the
-noise enters the objective through the fidelity only.
+noise enters the objective through the fidelity only. --filter-bandwidth-mhz changes the bandwidth
+of the control filter (10 MHz, the value of the paper, by default), --train-noise-samples the number
+of noise realizations averaged per step, and --models restricts the run to some of the three models.
 
 Output (independent of the number of workers):
   args.json
@@ -68,8 +70,10 @@ def run_one(task: Tuple[str, float, int, Dict[str, Any]]) -> Dict[str, Any]:
         adam_iters=cfg["adam_iters"],
         horizons_ns=(horizon_ns,),
         train_noise_std_mhz=sigma,
+        train_noise_samples=cfg["train_noise_samples"],
         train_noise_mode="quasi_static" if model == "quasi_static" else "white",
         leakage_from_nominal_controls=cfg["leakage_bound"] == "nominal",
+        filter_bandwidth_mhz=cfg["filter_bandwidth_mhz"],
         seed=seed,
         cost_weights=weights,
     )
@@ -84,6 +88,7 @@ def run_one(task: Tuple[str, float, int, Dict[str, Any]]) -> Dict[str, Any]:
         dt_ns=cfg["dt_ns"],
         runtime_norm_ns=cfg["runtime_norm_ns"],
         cost_weights=weights,
+        filter_bandwidth_mhz=cfg["filter_bandwidth_mhz"],
         note=f"Adam, training noise model {model}, horizon {horizon_ns} ns, seed {seed}",
     )
     name = plan_name(model, horizon_ns, seed)
@@ -126,9 +131,15 @@ def main() -> None:
              "TRPO environment; nominal: from the noise-free controls.",
     )
     parser.add_argument("--dt-ns", type=float, default=2.0)
+    parser.add_argument("--filter-bandwidth-mhz", type=float, default=10.0,
+                        help="Bandwidth of the two-pole control filter (10 MHz in the paper).")
     parser.add_argument("--runtime-norm-ns", type=float, default=60.0)
     parser.add_argument("--lr", type=float, default=3e-2)
     parser.add_argument("--adam-iters", type=int, default=400)
+    parser.add_argument("--train-noise-samples", type=int, default=1,
+                        help="Noise realizations averaged in each Adam step (1 in the paper).")
+    parser.add_argument("--models", type=str, default=",".join(MODELS),
+                        help="Comma-separated subset of none,white,quasi_static to run.")
     parser.add_argument("--cost-chi", type=float, default=10.0, help="Weight for fidelity cost")
     parser.add_argument("--cost-beta", type=float, default=10.0, help="Weight for leakage cost")
     parser.add_argument("--cost-mu", type=float, default=0.2, help="Weight for boundary cost")
@@ -146,10 +157,15 @@ def main() -> None:
     cfg = dict(vars(args))
     cfg["alpha"] = parse_angle_expr(args.alpha)
     cfg["gamma"] = parse_angle_expr(args.gamma)
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    unknown = set(models) - set(MODELS)
+    if unknown:
+        parser.error(f"unknown models: {sorted(unknown)}")
     tasks: List[Tuple[str, float, int, Dict[str, Any]]] = []
     for horizon in horizons:
-        tasks.append(("none", horizon, seeds[0], cfg))
-        for model in ("white", "quasi_static"):
+        if "none" in models:
+            tasks.append(("none", horizon, seeds[0], cfg))
+        for model in (m for m in ("white", "quasi_static") if m in models):
             tasks.extend((model, horizon, seed, cfg) for seed in seeds)
 
     rows: List[Dict[str, Any]] = []

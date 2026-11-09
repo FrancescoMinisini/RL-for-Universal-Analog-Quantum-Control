@@ -18,7 +18,9 @@ environment, including the leakage bound, which responds strongly to white noise
 --leakage-bound nominal the bound is accumulated from the noise-free controls instead, so that the
 noise enters the objective through the fidelity only. --filter-bandwidth-mhz changes the bandwidth
 of the control filter (10 MHz, the value of the paper, by default), --train-noise-samples the number
-of noise realizations averaged per step, and --models restricts the run to some of the three models.
+of noise realizations averaged per step, and --models restricts the run to some of the three models. --select-samples N replaces, for the
+quasi-static model, the selection of the stored iterate by its own sampled loss (which with few
+samples rewards a lucky draw) by its mean cost on N fixed offsets, shared by all iterates.
 
 Output (independent of the number of workers):
   args.json
@@ -71,6 +73,8 @@ def run_one(task: Tuple[str, float, int, Dict[str, Any]]) -> Dict[str, Any]:
         horizons_ns=(horizon_ns,),
         train_noise_std_mhz=sigma,
         train_noise_samples=cfg["train_noise_samples"],
+        select_samples=cfg["select_samples"] if model == "quasi_static" else 0,
+        select_every=cfg["select_every"],
         train_noise_mode="quasi_static" if model == "quasi_static" else "white",
         leakage_from_nominal_controls=cfg["leakage_bound"] == "nominal",
         filter_bandwidth_mhz=cfg["filter_bandwidth_mhz"],
@@ -111,6 +115,7 @@ def run_one(task: Tuple[str, float, int, Dict[str, Any]]) -> Dict[str, Any]:
         "nominal_time_ns": float(nominal["time_ns"]),
         "plan": f"plans/{name}",
         "history": result["history"],
+        "selection": result["selection"],
         "elapsed_seconds": round(elapsed, 2),
     }
 
@@ -138,6 +143,11 @@ def main() -> None:
     parser.add_argument("--adam-iters", type=int, default=400)
     parser.add_argument("--train-noise-samples", type=int, default=1,
                         help="Noise realizations averaged in each Adam step (1 in the paper).")
+    parser.add_argument("--select-samples", type=int, default=0,
+                        help="Quasi-static model only: keep the iterate with the lowest mean cost on this many "
+                             "fixed offsets, scored every --select-every steps (0: lowest sampled training loss, "
+                             "as in the paper).")
+    parser.add_argument("--select-every", type=int, default=25)
     parser.add_argument("--models", type=str, default=",".join(MODELS),
                         help="Comma-separated subset of none,white,quasi_static to run.")
     parser.add_argument("--cost-chi", type=float, default=10.0, help="Weight for fidelity cost")
@@ -196,9 +206,18 @@ def main() -> None:
                 "cost": float(entry["cost"]),
                 "best_cost_so_far": best_cost_so_far,
             })
-        logger.write({"type": "run_summary", **{k: v for k, v in row.items() if k != "history"}})
+        for entry in row["selection"]:
+            logger.write({
+                "type": "adam_selection",
+                "model": row["model"],
+                "horizon_ns": row["horizon_ns"],
+                "seed": row["seed"],
+                "adam_iter": int(entry["iter"]),
+                "fixed_offset_cost": float(entry["cost"]),
+            })
+        logger.write({"type": "run_summary", **{k: v for k, v in row.items() if k not in ("history", "selection")}})
 
-    columns = [k for k in rows[0] if k not in ("history", "elapsed_seconds")]
+    columns = [k for k in rows[0] if k not in ("history", "selection", "elapsed_seconds")]
     with open(os.path.join(args.out, "summary.csv"), "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=columns, lineterminator="\n")
         writer.writeheader()

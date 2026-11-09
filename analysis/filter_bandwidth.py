@@ -15,11 +15,15 @@ otherwise:
   40 MHz  adam_noise_models_bw40_nominal_leakage_converged   convergence check: no-noise and
           quasi-static models only, seeds 1-3, 4 noise samples per step and 800 steps instead of
           1 and 400 (source prefix bw40c)
+  10, 20, 40 MHz  adam_qs_converged_bw<B>   the converged study: no-noise and quasi-static models,
+          seeds 1-3, 4 noise samples per step, 1600 steps, stored iterate selected on 16 fixed
+          offsets every 25 steps (--select-samples; source prefix c<B>)
 
 Outputs (--out, default runs/filter_bandwidth_results/):
   plan_sensitivity.csv   one row per plan, with its filter bandwidth
   adam_noise_models.csv  per bandwidth, training-noise model and horizon: statistics over the seeds
                          (the columns of noise_memory_results/adam_noise_models_nominal_leakage.csv)
+  convergence.csv        runs with fixed-offset selection: that cost at a few steps and its minimum
 
 Run from anywhere: python analysis/filter_bandwidth.py [--workers N]
 """
@@ -33,6 +37,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 import argparse
 import csv
+import json
 import sys
 from concurrent.futures import ProcessPoolExecutor
 
@@ -49,7 +54,32 @@ RUNS = {
     "bw20": (20.0, "adam_noise_models_bw20_nominal_leakage"),
     "bw40": (40.0, "adam_noise_models_bw40_nominal_leakage"),
     "bw40c": (40.0, "adam_noise_models_bw40_nominal_leakage_converged"),
+    "c10": (10.0, "adam_qs_converged_bw10"),
+    "c20": (20.0, "adam_qs_converged_bw20"),
+    "c40": (40.0, "adam_qs_converged_bw40"),
 }
+CHECKPOINTS = (400, 800, 1200)
+
+
+def convergence_rows(prefix: str, directory: str):
+    """Fixed-offset cost of the selection records (train_adam_noise_models.py --select-samples)."""
+    runs = {}
+    with open(os.path.join(directory, "training_log.jsonl"), encoding="utf-8") as f:
+        for line in f:
+            r = json.loads(line)
+            if r["type"] == "adam_selection":
+                runs.setdefault((r["horizon_ns"], r["seed"]), []).append((r["adam_iter"], r["fixed_offset_cost"]))
+    out = []
+    for (horizon, seed), points in sorted(runs.items()):
+        points.sort()
+        rec = {"run": prefix, "filter_bandwidth_mhz": RUNS[prefix][0], "horizon_ns": horizon, "seed": seed}
+        for step in CHECKPOINTS:
+            rec[f"best_cost_by_step_{step}"] = min(c for i, c in points if i <= step)
+        rec["best_cost_final"] = min(c for _, c in points)
+        rec["best_iter"] = min(points, key=lambda p: p[1])[0]
+        rec["last_iter"] = points[-1][0]
+        out.append(rec)
+    return out
 
 
 def run_dir(name: str) -> str:
@@ -63,7 +93,7 @@ def main() -> None:
     ap.add_argument("--out", type=str, default="runs/filter_bandwidth_results")
     args = ap.parse_args()
 
-    tasks, bandwidth_of, prefixes = [], {}, []
+    tasks, bandwidth_of, prefixes, convergence = [], {}, [], []
     for prefix, (bandwidth, name) in RUNS.items():
         directory = run_dir(name)
         summary = os.path.join(directory, "summary.csv")
@@ -71,6 +101,7 @@ def main() -> None:
             print(f"skipping {prefix}: {summary} not found", flush=True)
             continue
         prefixes.append(prefix)
+        convergence += convergence_rows(prefix, directory)
         with open(summary, newline="", encoding="utf-8") as f:
             for r in csv.DictReader(f):
                 source = f"{prefix}_{r['model']}"
@@ -92,6 +123,8 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     write_csv(os.path.join(args.out, "plan_sensitivity.csv"), rows)
     write_csv(os.path.join(args.out, "adam_noise_models.csv"), summary_rows)
+    if convergence:
+        write_csv(os.path.join(args.out, "convergence.csv"), convergence)
     print("written to", args.out)
 
 

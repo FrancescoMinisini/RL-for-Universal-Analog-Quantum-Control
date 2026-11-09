@@ -29,6 +29,12 @@ class AdamBaselineConfig:
     # False: the leakage bound is accumulated from the noisy Hamiltonian, as in the TRPO environment;
     # True: from the noise-free controls, so that the noise enters the objective through the fidelity only
     leakage_from_nominal_controls: bool = False
+    # 0: keep the iterate with the lowest sampled training loss (the original baseline). N > 0
+    # (quasi-static training only): every select_every steps, and at the last step, score the
+    # iterate on N fixed quasi-static offsets, drawn once from a generator separate from the training
+    # noise and shared by all iterates, and keep the best by that score
+    select_samples: int = 0
+    select_every: int = 25
     seed: int = 1
     cost_weights: UFOCostWeights = UFOCostWeights()
 
@@ -173,7 +179,10 @@ class TorchGmonObjective:
         sigma_mhz: float = 0.0,
         noise_mode: str = "white",
         leakage_from_nominal: bool = False,
+        fixed_offsets: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """fixed_offsets (quasi-static only): the 6 offsets (eta, delta1, delta2, f1, f2, g) in MHz, used
+        instead of a random draw; sigma_mhz must then be positive and is otherwise ignored."""
         if noise_mode not in ("white", "quasi_static"):
             raise ValueError(f"Unknown noise mode: {noise_mode!r}")
         T = filtered_controls.shape[0]
@@ -184,7 +193,9 @@ class TorchGmonObjective:
         delta_hist: List[torch.Tensor] = []
 
         quasi_static = sigma_mhz > 0.0 and noise_mode == "quasi_static"
-        if quasi_static:
+        if quasi_static and fixed_offsets is not None:
+            eta_offset, offsets = fixed_offsets[0], fixed_offsets[1:]
+        elif quasi_static:
             eta_offset = torch.randn((), dtype=self.rdtype, device=self.device) * sigma_mhz
             offsets = torch.randn(5, dtype=self.rdtype, device=self.device) * sigma_mhz
 
@@ -271,6 +282,14 @@ class TorchGmonObjective:
         best_cost = float("inf")
         best_controls = None
         history: List[Dict[str, float]] = []
+        selection: List[Dict[str, float]] = []
+        validate = self.config.select_samples > 0 and self.config.train_noise_std_mhz > 0.0
+        if validate:
+            if self.config.train_noise_mode != "quasi_static":
+                raise ValueError("select_samples is implemented for quasi-static training noise only")
+            gen = torch.Generator(device="cpu").manual_seed(10_000 + self.config.seed)
+            fixed = torch.randn((self.config.select_samples, 6), generator=gen, dtype=self.rdtype)
+            fixed = (fixed * self.config.train_noise_std_mhz).to(self.device)
 
         for it in range(self.config.adam_iters):
             opt.zero_grad(set_to_none=True)
@@ -292,15 +311,27 @@ class TorchGmonObjective:
 
             cost_val = float(loss.item())
             history.append({"iter": float(it), "cost": cost_val})
-            if cost_val < best_cost:
-                best_cost = cost_val
-                best_controls = filtered.detach().cpu().numpy()
+            if not validate:
+                if cost_val < best_cost:
+                    best_cost = cost_val
+                    best_controls = filtered.detach().cpu().numpy()
+            elif it % self.config.select_every == 0 or it == self.config.adam_iters - 1:
+                # the iterate the gradient was evaluated at, as in the original rule
+                with torch.no_grad():
+                    score = float(torch.stack([
+                        self.simulate_cost(filtered.detach(), target, fixed_offsets=row, **noise) for row in fixed
+                    ]).mean().item())
+                selection.append({"iter": float(it), "cost": score})
+                if score < best_cost:
+                    best_cost = score
+                    best_controls = filtered.detach().cpu().numpy()
 
         return {
             "horizon_ns": float(horizon_ns),
             "best_cost": float(best_cost),
             "controls": np.asarray(best_controls, dtype=np.float64),
             "history": history,
+            "selection": selection,
         }
 
     def optimize(self, target_alpha: float, target_gamma: float) -> Dict[str, object]:

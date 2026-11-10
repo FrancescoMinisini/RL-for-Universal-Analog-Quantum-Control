@@ -145,6 +145,7 @@ def save_eval_plan(
     weights: UFOCostWeights,
     path: str,
     note: str,
+    filter_bandwidth_mhz: float = 10.0,
 ) -> None:
     plan = ControlPlan(
         controls_mhz_and_phase=np.asarray(eval_info["nominal_controls"], dtype=np.float64),
@@ -153,6 +154,7 @@ def save_eval_plan(
         dt_ns=dt_ns,
         runtime_norm_ns=runtime_norm_ns,
         cost_weights=weights,
+        filter_bandwidth_mhz=filter_bandwidth_mhz,
         note=note,
     )
     plan.save(path)
@@ -243,6 +245,20 @@ def main() -> None:
     parser.add_argument("--gamma", type=str, default="pi/2", help="Target gamma, e.g. 'pi/2'")
     parser.add_argument("--noise-optimized", action="store_true", help="Train in the stochastic 1 MHz environment.")
     parser.add_argument("--train-noise-std", type=float, default=1.0)
+    parser.add_argument(
+        "--train-noise-mode",
+        choices=["white", "quasi_static"],
+        default="white",
+        help="white: a new draw at every step (the UFO noise); quasi_static: one offset per channel per episode.",
+    )
+    parser.add_argument(
+        "--observe-nominal",
+        action="store_true",
+        help="With --noise-optimized: the policy observes the propagator of the noise-free controls, so it "
+             "cannot react to the noise realization (open-loop training); the cost stays the noisy one.",
+    )
+    parser.add_argument("--filter-bandwidth-mhz", type=float, default=10.0,
+                        help="Bandwidth of the two-pole control filter (10 MHz in the paper).")
     parser.add_argument("--episodes-per-batch", type=int, default=20000)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--eval-every", type=int, default=1)
@@ -377,6 +393,9 @@ def main() -> None:
             dt_ns=args.dt_ns,
             noise_optimized=bool(args.noise_optimized),
             train_noise_std_mhz=args.train_noise_std,
+            train_noise_mode=args.train_noise_mode,
+            observe_nominal=bool(args.observe_nominal),
+            filter_bandwidth_mhz=args.filter_bandwidth_mhz,
             reward_mode=args.reward_mode,
             termination_cost=args.termination_cost,
             runtime_norm_ns=args.runtime_norm_ns,
@@ -393,6 +412,7 @@ def main() -> None:
             max_time_ns=args.max_time_ns,
             dt_ns=args.dt_ns,
             noise_optimized=False,
+            filter_bandwidth_mhz=args.filter_bandwidth_mhz,
             reward_mode=args.reward_mode,
             termination_cost=args.termination_cost,
             runtime_norm_ns=args.runtime_norm_ns,
@@ -533,6 +553,7 @@ def main() -> None:
                     dt_ns=args.dt_ns,
                     runtime_norm_ns=args.runtime_norm_ns,
                     weights=weights,
+                    filter_bandwidth_mhz=args.filter_bandwidth_mhz,
                     path=iter_plan_path,
                     note=f"TRPO single target iteration {iteration}",
                 )
@@ -596,6 +617,7 @@ def main() -> None:
                         dt_ns=args.dt_ns,
                         runtime_norm_ns=args.runtime_norm_ns,
                         weights=weights,
+                        filter_bandwidth_mhz=args.filter_bandwidth_mhz,
                         path=best_plan_path,
                         note=f"TRPO single target best at iteration {iteration}",
                     )
@@ -631,6 +653,7 @@ def main() -> None:
             dt_ns=args.dt_ns,
             runtime_norm_ns=args.runtime_norm_ns,
             weights=weights,
+            filter_bandwidth_mhz=args.filter_bandwidth_mhz,
             path=final_plan_path,
             note="final single-target deterministic rollout",
         )

@@ -23,6 +23,7 @@ class BatchedQuantumControlEnv:
 
     The only difference is the random stream: the noise comes from a torch generator, so a
     batched rollout is not sample-by-sample the rollout of the scalar environment.
+    EnvConfig.train_noise_mode and observe_nominal act as in the scalar environment.
     """
 
     def __init__(self, system: GmonSystem, config: EnvConfig, batch_size: int, seed: int | None = None):
@@ -66,6 +67,9 @@ class BatchedQuantumControlEnv:
         self.filter_b2 = alpha ** 2
         self.linear = torch.tensor([0, 1, 2, 4, 6], dtype=torch.long)
         self.phase = torch.tensor([3, 5], dtype=torch.long)
+        if config.train_noise_mode not in ("white", "quasi_static"):
+            raise ValueError(f"Unknown train_noise_mode: {config.train_noise_mode!r}")
+        self.tracks_nominal = bool(config.observe_nominal and config.noise_optimized)
 
         self.reset()
 
@@ -83,10 +87,20 @@ class BatchedQuantumControlEnv:
         self.leakage_integral = torch.zeros(B, dtype=torch.float64)
         self.first_controls: Tensor | None = None
         self.done = torch.zeros(B, dtype=torch.bool)
+        self.U_nominal = self.U.clone() if self.tracks_nominal else None
+        self.quasi_static_offsets: Tensor | None = None
+        if self.config.noise_optimized and self.config.train_noise_mode == "quasi_static":
+            self.quasi_static_offsets = (
+                torch.randn(B, 6, dtype=torch.float64, generator=self.generator) * self.config.train_noise_std_mhz
+            )
         return self._obs()
 
+    def set_quasi_static_offsets(self, offsets_mhz: Tensor) -> None:
+        """Replace the offsets drawn at reset ([B, 6]: eta, delta1, delta2, f1, f2, g)."""
+        self.quasi_static_offsets = offsets_mhz.to(torch.float64).clone()
+
     def _obs(self) -> Tensor:
-        flat = self.U.reshape(self.batch_size, -1)
+        flat = (self.U if self.U_nominal is None else self.U_nominal).reshape(self.batch_size, -1)
         frac = torch.full((self.batch_size, 1), self.steps / max(self.max_steps, 1), dtype=torch.float64)
         return torch.cat([flat.real, flat.imag, frac], dim=1).to(torch.float32)
 
@@ -139,7 +153,8 @@ class BatchedQuantumControlEnv:
     def step(self, action: Tensor, noise_mhz: Tensor | None = None) -> Tuple[Tensor, Tensor, Tensor, Tensor, Dict[str, Tensor]]:
         """
         action: [B, 7] in [-1, 1]. noise_mhz: optional [B, 6] perturbations of
-        (eta, delta1, delta2, f1, f2, g), used instead of drawing them.
+        (eta, delta1, delta2, f1, f2, g), used instead of drawing them (white) or instead of
+        the offsets drawn at reset (quasi-static).
 
         Returns (obs, reward, done, alive, info). alive marks the episodes that were still
         running when the step was taken; the rows of finished episodes keep evolving and must
@@ -161,7 +176,9 @@ class BatchedQuantumControlEnv:
         eta_mhz = torch.full((self.batch_size,), self.eta_base_mhz, dtype=torch.float64)
         noisy = filtered
         if cfg.noise_optimized:
-            if noise_mhz is None:
+            if noise_mhz is None and self.quasi_static_offsets is not None:
+                noise_mhz = self.quasi_static_offsets
+            elif noise_mhz is None:
                 noise_mhz = torch.randn(self.batch_size, 6, dtype=torch.float64, generator=self.generator) * cfg.train_noise_std_mhz
             eta_mhz = eta_mhz + noise_mhz[:, 0]
             noisy = filtered.clone()
@@ -173,9 +190,18 @@ class BatchedQuantumControlEnv:
         phases = torch.exp(-1j * eigvals * self.dt_ns)
         self.U = (eigvecs * phases[:, None, :]) @ eigvecs.conj().transpose(1, 2) @ self.U
 
+        H_nominal = None
+        eta_nominal = torch.full_like(eta_mhz, self.eta_base_mhz)
+        if self.U_nominal is not None or (cfg.leakage_from_nominal_controls and cfg.noise_optimized):
+            H_nominal = self.hamiltonian(filtered, eta_nominal)
+        if self.U_nominal is not None:
+            Hn = 0.5 * (H_nominal + H_nominal.conj().transpose(1, 2))
+            eigvals_n, eigvecs_n = torch.linalg.eigh(Hn)
+            phases_n = torch.exp(-1j * eigvals_n * self.dt_ns)
+            self.U_nominal = (eigvecs_n * phases_n[:, None, :]) @ eigvecs_n.conj().transpose(1, 2) @ self.U_nominal
+
         if cfg.leakage_from_nominal_controls and cfg.noise_optimized:
-            eta_nominal = torch.full_like(eta_mhz, self.eta_base_mhz)
-            leakage = self._leakage_step(self.hamiltonian(filtered, eta_nominal), eta_nominal)
+            leakage = self._leakage_step(H_nominal, eta_nominal)
         else:
             leakage = self._leakage_step(H, eta_mhz)
 

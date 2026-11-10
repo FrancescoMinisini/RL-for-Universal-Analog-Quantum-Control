@@ -6,7 +6,9 @@ script compares it with uqc.env.QuantumControlEnv and prints the largest differe
 
   step by step     same actions and same noise in both environments: cost, fidelity, leakage
                    bound and observation at every step, without noise, with noise, and with
-                   the leakage bound taken from the noise-free controls
+                   the leakage bound taken from the noise-free controls, with quasi-static
+                   noise (one offset per episode), and with the observation of the noise-free
+                   propagator (EnvConfig.observe_nominal), which must not depend on the noise
   rollouts         batched stochastic rollouts of a policy, with a stopping cost that ends
                    about half of the episodes early, replayed action by action in the scalar
                    environment: observations, rewards, episode boundaries and final infos
@@ -77,7 +79,15 @@ def check_steps(system: GmonSystem) -> None:
         "no noise": base_config(noise_optimized=False),
         "noise": base_config(noise_optimized=True),
         "noise, nominal leakage": base_config(noise_optimized=True, leakage_from_nominal_controls=True),
+        "quasi-static": base_config(noise_optimized=True, train_noise_mode="quasi_static"),
+        "quasi-static, nominal leakage": base_config(
+            noise_optimized=True, train_noise_mode="quasi_static", leakage_from_nominal_controls=True),
+        "noise, nominal observation": base_config(noise_optimized=True, observe_nominal=True),
+        "quasi-static, nominal observation and leakage": base_config(
+            noise_optimized=True, train_noise_mode="quasi_static", observe_nominal=True,
+            leakage_from_nominal_controls=True),
     }
+    noise_free_obs = None
     for name, cfg in cases.items():
         keys = ("cost", "fidelity", "leakage", "boundary_cost")
         ref = {k: np.zeros((T, B)) for k in keys}
@@ -86,25 +96,42 @@ def check_steps(system: GmonSystem) -> None:
         for b in range(B):
             env = QuantumControlEnv(system, replace(cfg, seed=1000 + b))
             twin = np.random.default_rng(1000 + b)  # the stream the scalar environment draws from
+            if cfg.noise_optimized and cfg.train_noise_mode == "quasi_static":
+                noise[:, b, 0] = twin.normal(0.0, cfg.train_noise_std_mhz)  # drawn once, at reset
+                noise[:, b, 1:] = twin.normal(0.0, cfg.train_noise_std_mhz, size=5)
             for t in range(T):
-                if cfg.noise_optimized:
+                if cfg.noise_optimized and cfg.train_noise_mode == "white":
                     noise[t, b, 0] = twin.normal(0.0, cfg.train_noise_std_mhz)
                     noise[t, b, 1:] = twin.normal(0.0, cfg.train_noise_std_mhz, size=5)
                 obs, _, _, info = env.step(actions[t, b])
                 ref_obs[t, b] = obs
                 for k in keys:
                     ref[k][t, b] = info[k]
+        if cfg.noise_optimized and cfg.train_noise_mode == "quasi_static":
+            report(f"{name}: offsets constant over the episode", float(np.ptp(noise, axis=0).max()), 0.0)
         benv = BatchedQuantumControlEnv(system, cfg, B, seed=0)
         err = {k: 0.0 for k in keys}
         err_obs = 0.0
         for t in range(T):
-            obs, _, _, _, info = benv.step(torch.as_tensor(actions[t]), noise_mhz=torch.as_tensor(noise[t]))
+            if cfg.train_noise_mode == "quasi_static":
+                # through the offsets of the episode, as in training
+                benv.set_quasi_static_offsets(torch.as_tensor(noise[t]))
+                obs, _, _, _, info = benv.step(torch.as_tensor(actions[t]))
+            else:
+                obs, _, _, _, info = benv.step(torch.as_tensor(actions[t]), noise_mhz=torch.as_tensor(noise[t]))
             for k in keys:
                 err[k] = max(err[k], float(np.abs(info[k].numpy() - ref[k][t]).max()))
             err_obs = max(err_obs, float(np.abs(obs.numpy() - ref_obs[t]).max()))
         for k in keys:
             report(f"{name}: {k}", err[k], TOLERANCE)
         report(f"{name}: observation", err_obs, OBS_TOLERANCE)
+        if not cfg.noise_optimized:
+            noise_free_obs = ref_obs
+        elif cfg.observe_nominal:
+            report(f"{name}: observation - noise-free observation", float(np.abs(ref_obs - noise_free_obs).max()), 0.0)
+        elif noise_free_obs is not None:
+            print(f"  {'':<58} (noisy observation differs from the noise-free one by "
+                  f"{float(np.abs(ref_obs - noise_free_obs).max()):.2e})")
         print(f"  {'':<58} (leakage bound at the last step: {ref['leakage'][-1].mean():.4f})")
 
 

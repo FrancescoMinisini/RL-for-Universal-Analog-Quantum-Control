@@ -7,6 +7,17 @@ episodes per batch, 100 iterations, stopping cost 0.40, batched engine):
   <out-root>/matched_noise_nomleak_seed<N>    1 MHz training noise, with the leakage bound of
                                               the training cost taken from the noise-free controls
 
+With --experiment quasi_static_40mhz the same settings are used, with a 40 MHz control filter,
+for three arms that differ only in the training noise and in what the policy observes:
+
+  <out-root>/qs40_nominal_seed<N>     no training noise
+  <out-root>/qs40_open_seed<N>        quasi-static noise of 0.3 MHz (one offset per channel per
+                                      episode), the policy observes the noise-free propagator, so
+                                      it can only learn an open-loop pulse
+  <out-root>/qs40_feedback_seed<N>    the same noise, the policy observes the noisy propagator
+                                      and can learn to react to the offsets
+with the leakage bound of the training cost taken from the noise-free controls in the noisy arms.
+
 The runs are launched one after the other through train_trpo_single_target.py. Launch the
 script again after an interruption: runs with a summary.json are skipped, a run with
 checkpoints is resumed from the newest one (at most one iteration is lost), the others start
@@ -14,6 +25,7 @@ from scratch.
 
     py -3.12 run_matched_retraining.py              # needs a CUDA build of torch
     py -3.12 run_matched_retraining.py --status     # what is done, without running anything
+    py -3.12 run_matched_retraining.py --experiment quasi_static_40mhz
 """
 from __future__ import annotations
 
@@ -26,9 +38,17 @@ import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
-ARMS = {
-    "matched_nominal": [],
-    "matched_noise_nomleak": ["--noise-optimized", "--train-noise-std", "1.0", "--leakage-bound", "nominal"],
+QS = ["--noise-optimized", "--train-noise-mode", "quasi_static", "--train-noise-std", "0.3", "--leakage-bound", "nominal"]
+EXPERIMENTS = {
+    "white": {
+        "matched_nominal": [],
+        "matched_noise_nomleak": ["--noise-optimized", "--train-noise-std", "1.0", "--leakage-bound", "nominal"],
+    },
+    "quasi_static_40mhz": {
+        "qs40_nominal": ["--filter-bandwidth-mhz", "40"],
+        "qs40_open": ["--filter-bandwidth-mhz", "40", "--observe-nominal"] + QS,
+        "qs40_feedback": ["--filter-bandwidth-mhz", "40"] + QS,
+    },
 }
 
 
@@ -39,6 +59,7 @@ def last_iteration(run_dir: str) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Matched nominal / noise-trained TRPO runs, restartable.")
+    ap.add_argument("--experiment", choices=sorted(EXPERIMENTS), default="white")
     ap.add_argument("--seeds", type=str, default="1,2,3")
     ap.add_argument("--iterations", type=int, default=100)
     ap.add_argument("--episodes-per-batch", type=int, default=10000)
@@ -50,7 +71,8 @@ def main() -> None:
 
     os.chdir(ROOT)
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
-    jobs = [(f"{arm}_seed{seed}", seed, extra) for seed in seeds for arm, extra in ARMS.items()]
+    arms = EXPERIMENTS[args.experiment]
+    jobs = [(f"{arm}_seed{seed}", seed, extra) for seed in seeds for arm, extra in arms.items()]
 
     if args.status:
         for name, _, _ in jobs:

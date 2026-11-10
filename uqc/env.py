@@ -24,6 +24,13 @@ class EnvConfig:
     min_fidelity: float | None = None
     # Accumulate the leakage bound from the noise-free controls instead of the noisy Hamiltonian.
     leakage_from_nominal_controls: bool = False
+    # "white": a new draw at every step (the UFO training noise); "quasi_static": one draw of the
+    # offsets (eta, delta1, delta2, f1, f2, g) per episode, at reset, held for the whole episode.
+    train_noise_mode: str = "white"
+    # Observe the propagator of the noise-free controls instead of the noisy one, so that the
+    # policy has no information about the noise realization and can only learn an open-loop pulse.
+    # The cost and the reward stay those of the noisy propagator.
+    observe_nominal: bool = False
     seed: int | None = None
     cost_weights: UFOCostWeights = UFOCostWeights()
 
@@ -73,6 +80,8 @@ class QuantumControlEnv:
         dim = system.dim
         self.observation_dim = 2 * (dim * dim) + 1
         self.action_dim = 7
+        if config.train_noise_mode not in ("white", "quasi_static"):
+            raise ValueError(f"Unknown train_noise_mode: {config.train_noise_mode!r}")
 
         self.reset()
 
@@ -84,6 +93,14 @@ class QuantumControlEnv:
         self.leakage.reset()
         self.done = False
         self.current_eta_mhz = self.system.config.eta_base_mhz
+        # Noise-free propagator, kept only when it can differ from U and the policy observes it.
+        self.U_nominal = self.U.copy() if self._tracks_nominal() else None
+        self.quasi_static_offsets: np.ndarray | None = None
+        if self.config.noise_optimized and self.config.train_noise_mode == "quasi_static":
+            std = self.config.train_noise_std_mhz
+            # Drawn in the order of a white step: eta first, then the five control offsets.
+            eta_offset = self.rng.normal(0.0, std)
+            self.quasi_static_offsets = np.concatenate([[eta_offset], self.rng.normal(0.0, std, size=5)])
         self.nominal_controls_history: List[np.ndarray] = []
         self.noisy_controls_history: List[np.ndarray] = []
         self.reward_history: List[float] = []
@@ -91,8 +108,11 @@ class QuantumControlEnv:
         self.fidelity_history: List[float] = []
         return self._obs()
 
+    def _tracks_nominal(self) -> bool:
+        return self.config.observe_nominal and self.config.noise_optimized
+
     def _obs(self) -> np.ndarray:
-        flat = self.U.reshape(-1)
+        flat = (self.U if self.U_nominal is None else self.U_nominal).reshape(-1)
         frac = self.steps / max(self.max_steps, 1)
         obs = np.concatenate([flat.real, flat.imag, np.array([frac], dtype=np.float64)])
         return obs.astype(np.float32)
@@ -109,10 +129,14 @@ class QuantumControlEnv:
     def _apply_noise(self, nominal_controls: np.ndarray) -> Tuple[np.ndarray, float]:
         controls = nominal_controls.copy()
         eta_mhz = self.system.config.eta_base_mhz
-        if self.config.noise_optimized:
+        if self.config.noise_optimized and self.quasi_static_offsets is not None:
+            eta_mhz = self.system.config.eta_base_mhz + self.quasi_static_offsets[0]
+            noise = self.quasi_static_offsets[1:]
+        elif self.config.noise_optimized:
             std = self.config.train_noise_std_mhz
             eta_mhz = self.system.config.eta_base_mhz + self.rng.normal(0.0, std)
             noise = self.rng.normal(0.0, std, size=5)
+        if self.config.noise_optimized:
             controls[0] += noise[0]
             controls[1] += noise[1]
             controls[2] += noise[2]
@@ -160,9 +184,13 @@ class QuantumControlEnv:
         self.current_eta_mhz = eta_mhz
         H = self.system.hamiltonian(noisy_controls, eta_mhz)
         self.U = scipy_expm_step(self.U, H, self.system.dt_ns)
+        H_nominal = None
+        if self.U_nominal is not None or (self.config.leakage_from_nominal_controls and self.config.noise_optimized):
+            H_nominal = self.system.hamiltonian(filtered, self.system.config.eta_base_mhz)
+        if self.U_nominal is not None:
+            self.U_nominal = scipy_expm_step(self.U_nominal, H_nominal, self.system.dt_ns)
         if self.config.leakage_from_nominal_controls and self.config.noise_optimized:
-            eta_nominal = self.system.config.eta_base_mhz
-            self.leakage.step(self.system.hamiltonian(filtered, eta_nominal), eta_nominal)
+            self.leakage.step(H_nominal, self.system.config.eta_base_mhz)
         else:
             self.leakage.step(H, eta_mhz)
         self.nominal_controls_history.append(filtered.copy())

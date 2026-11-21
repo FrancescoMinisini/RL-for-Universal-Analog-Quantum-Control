@@ -73,6 +73,8 @@ SIGMA_CLOSED = 0.3          # MHz, the training strength
 CLOSED_SAMPLES = 200
 CLOSED_SEED = 21
 MAX_TIME_NS = 180.0
+PLAN_TOLERANCE_MHZ = 1e-5   # checkpoint replay against the stored plan (see evaluate_policy)
+PHASES = [3, 5]             # control indices that are phases
 ADAM_SENSITIVITY = "runs/filter_bandwidth_results/plan_sensitivity.csv"
 
 
@@ -128,8 +130,18 @@ def evaluate_policy(task):
         action, _ = agent.get_action(obs, deterministic=True)
         actions.append(action)
         obs, _, _, _ = env.step(action)
-    if not np.allclose(np.asarray(env.nominal_controls_history), plan.controls_mhz_and_phase, atol=1e-6, rtol=0):
-        raise RuntimeError(f"{arm} seed {seed} iteration {iteration}: checkpoint does not reproduce its plan")
+    # The policy network is float32 and the training process evaluates it with other kernels than
+    # these workers: the replayed controls differ from the stored ones by up to ~3e-6 MHz (a few
+    # float32 ulps of controls up to 20 MHz) without growing along the pulse. Phases are compared
+    # modulo 2 pi.
+    replayed = np.asarray(env.nominal_controls_history)
+    stored = plan.controls_mhz_and_phase
+    diff = np.abs(replayed - stored) if replayed.shape == stored.shape else np.array([np.inf])
+    if replayed.shape == stored.shape:
+        diff[:, PHASES] = np.minimum(diff[:, PHASES], 2.0 * np.pi - diff[:, PHASES])
+    if diff.max() > PLAN_TOLERANCE_MHZ:
+        raise RuntimeError(f"{arm} seed {seed} iteration {iteration}: checkpoint does not reproduce its plan "
+                           f"(max difference {diff.max():.2e})")
 
     env = make_env(system, plan, noisy=True, observe_nominal=observe_nominal)
     closed, opened = [], []
